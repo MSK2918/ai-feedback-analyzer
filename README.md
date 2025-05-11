@@ -4,7 +4,10 @@ An intelligent, full-stack feedback analysis platform that leverages **Natural L
 Built with ❤️ using **Spring Boot**, **FastAPI**, **React.js**, **Redis**, **MySQL**, **Docker**, and **Tailwind CSS**.
 
 ![Demo Screenshot]
-![feedback history image](<feedback history.png>) ![login page image](<login page.png>) ![dashboard page image](dashboard.png)
+![login page image](<login page.png>)
+![dashboard page image](dashboard.png)
+![feedback history image](<feedback history.png>)
+![cloud deploy image](railway.png)
 
 ---
 
