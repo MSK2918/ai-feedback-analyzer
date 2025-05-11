@@ -1,0 +1,18 @@
+package com.msk.Sentiment.exception;
+
+
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class SaveFailedException extends RuntimeException {
+
+    private String message;
+
+    public SaveFailedException(String message) {
+        super(message);
+        String.join(", ", message);
+        this.message = message;
+    }
+}

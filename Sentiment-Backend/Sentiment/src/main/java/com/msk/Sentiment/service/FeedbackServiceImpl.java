@@ -1,0 +1,223 @@
+package com.msk.Sentiment.service;
+
+import com.msk.Sentiment.api.FeedbackRequest;
+import com.msk.Sentiment.api.GreetResponse;
+import com.msk.Sentiment.dto.*;
+import com.msk.Sentiment.entity.Feedback;
+import com.msk.Sentiment.entity.User;
+import com.msk.Sentiment.mapper.FeedbackMapper;
+import com.msk.Sentiment.repository.MskFeedbackRepository;
+import com.msk.Sentiment.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.time.Month;
+import java.time.Year;
+import java.time.format.TextStyle;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class FeedbackServiceImpl implements FeedbackService {
+
+    private final RestTemplate restTemplate;
+    private final UserRepository userRepository;
+    private final MskFeedbackRepository mskFeedbackRepository;
+    private final FeedbackMapper feedbackMapper;
+
+    @Value("${fastApi.url}")
+    private String fastApiUrl;
+
+    @Override
+    @Caching(evict = {
+            @CacheEvict(value = "feedbacksByUser", allEntries = true),
+            @CacheEvict(value = "feedbackCountByUser", key = "#email"),
+            @CacheEvict(value = "monthlySentimentByUser", key = "#email")
+    })
+    public FeedbackResponseDTO sentFeedbackToFastApi(FeedbackRequestDTO feedbackRequestDTO, String email) {
+
+        Feedback feedback = feedbackMapper.feedbackDtoToFeedback(feedbackRequestDTO);
+
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            throw new UsernameNotFoundException("User not found with email: " + email);
+        }
+
+        String feedbackText = feedbackRequestDTO.feedbackText();
+        FeedbackRequest feedbackRequest = new FeedbackRequest();
+        feedbackRequest.setFeedbackText(feedbackText);
+
+        HttpEntity<Object> httpEntity = new HttpEntity<>(feedbackRequest);
+        ResponseEntity<GreetResponse> response = restTemplate.exchange(fastApiUrl, HttpMethod.POST, httpEntity, GreetResponse.class);
+
+        if (response.getStatusCode().value() == 200) {
+            GreetResponse responseBody = response.getBody();
+
+            feedback.setFeedbackText(responseBody.getTranslatedText());
+            feedback.setSentiment(responseBody.getSentiment());
+            feedback.setTimestamp(responseBody.getTimestamp());
+            feedback.setPositiveScore(responseBody.getScores().get("pos"));
+            feedback.setNegativeScore(responseBody.getScores().get("neg"));
+            feedback.setNeutralScore(responseBody.getScores().get("neu"));
+
+            // Set sentiment score based on sentiment result
+            String sentimentText = responseBody.getSentiment();
+            switch (sentimentText) {
+                case "Positive":
+                    feedback.setSentimentScore(responseBody.getScores().get("pos"));
+                    break;
+                case "Negative":
+                    feedback.setSentimentScore(responseBody.getScores().get("neg"));
+                    break;
+                case "Neutral":
+                    feedback.setSentimentScore(responseBody.getScores().get("neu"));
+                    break;
+            }
+
+            feedback.setUser(user);
+            mskFeedbackRepository.save(feedback);
+        }
+
+        return feedbackMapper.feedbackToFeedbackResponseDTO(feedback);
+    }
+
+    @Cacheable(value = "feedbacksByUser", key = "#email + ':' + #pageNo + ':' + #pageSize + ':' + #sentiment")
+    @Override
+    public List<FeedbackListResponseDTO> getAllFeedbacksFromUser(String email, int pageNo, int pageSize, String sentiment) {
+
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            throw new UsernameNotFoundException("User not found");
+        }
+
+        Pageable pageable = PageRequest.of(pageNo, pageSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+        List<Feedback> feedbacks;
+
+        if (sentiment == null || sentiment.isBlank() || sentiment.equalsIgnoreCase("all")) {
+            feedbacks = mskFeedbackRepository.findFeedbacksByUserId(user.getUserId(), pageable);
+        } else {
+            feedbacks = mskFeedbackRepository.findFeedbacksByUserIdAndSentiment(user.getUserId(), sentiment, pageable);
+        }
+
+        return feedbackMapper.feedbackToFeedbackResponseDTO(feedbacks);
+    }
+
+    @Cacheable(value = "feedbackById", key = "#feedbackId")
+    @Override
+    public FeedbackResponseDTO getFeedbackById(UUID feedbackId) {
+
+        var feedback = mskFeedbackRepository.findById(feedbackId)
+                .orElseThrow(() -> new RuntimeException("Feedback not found"));
+
+        return feedbackMapper.feedbackToFeedbackResponseDTO(feedback);
+    }
+
+    @Caching(evict = {
+            @CacheEvict(value = "feedbackById", key = "#feedbackId"),
+            @CacheEvict(value = "feedbacksByUser", allEntries = true),
+            @CacheEvict(value = "feedbackCountByUser", allEntries = true),
+            @CacheEvict(value = "monthlySentimentByUser", allEntries = true)
+    })
+    @Override
+    public void deleteFeedback(UUID feedbackId) {
+
+        var feedback = mskFeedbackRepository.findById(feedbackId)
+                .orElseThrow(() -> new RuntimeException("Feedback not found to delete"));
+
+        mskFeedbackRepository.deleteById(feedbackId);
+    }
+
+    @Cacheable(value = "feedbackCountByUser", key = "#email")
+    @Override
+    public FeedbackCountResponseDTO countFeedbacksByUserId(String email) {
+
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            throw new UsernameNotFoundException("User not found with email: " + email);
+        }
+
+        UUID userId = user.getUserId();
+
+        Integer count = mskFeedbackRepository.countFeedbacksByUserId(userId);
+        Integer countPositive = mskFeedbackRepository.countPositiveFeedbacksByUserId(userId);
+        Integer countNegative = mskFeedbackRepository.countNegativeFeedbacksByUserId(userId);
+        Integer countNeutral = mskFeedbackRepository.countNeutralFeedbacksByUserId(userId);
+        Integer currentMonthFeedbackCount = mskFeedbackRepository.countFeedbacksByUserIdInCurrentMonth(userId);
+
+        int positive = countPositive != null ? countPositive : 0;
+        int total = count != null ? count : 0;
+
+        double totalFeedbacksPercent = 0.0;
+        if (total > 0) {
+            totalFeedbacksPercent = (double) positive / total * 100;
+        }
+
+        return new FeedbackCountResponseDTO(count, countPositive, countNegative, countNeutral,
+                currentMonthFeedbackCount, totalFeedbacksPercent);
+    }
+
+    @Caching(evict = {
+            @CacheEvict(value = "feedbackByEmail", key = "#email"),
+            @CacheEvict(value = "feedbacksByUser", allEntries = true),
+            @CacheEvict(value = "feedbackCountByUser", key = "#email"),
+            @CacheEvict(value = "monthlySentimentByUser", key = "#email")
+    })
+    @Override
+    public void deleteAllFeedbacks(String email) {
+
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            throw new UsernameNotFoundException("User not found with email: " + email);
+        }
+
+        mskFeedbackRepository.deleteFeedbacksByUserId(user.getUserId());
+    }
+
+    @Cacheable(value = "monthlySentimentByUser", key = "#email")
+    @Override
+    public List<MonthlySentimentDTO> getMonthlySentiment(String email) {
+
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            throw new UsernameNotFoundException("User not found with email: " + email);
+        }
+
+        UUID userId = user.getUserId();
+        List<MonthlySentimentDTO> result = new ArrayList<>();
+        int currentYear = Year.now().getValue();
+
+        for (int month = 1; month <= 12; month++) {
+            int totalCurrentMonthFeedbacks = mskFeedbackRepository.countFeedbacksByUserIdInMonth(userId, month, currentYear);
+            int totalCurrMonthPositiveFeedbacks = mskFeedbackRepository.countFeedbacksByUserIdInMonthAndSentiment(userId, month, currentYear, "Positive");
+            int totalCurrMonthNegativeFeedbacks = mskFeedbackRepository.countFeedbacksByUserIdInMonthAndSentiment(userId, month, currentYear, "Negative");
+            int totalCurrMonthNeutralFeedbacks = mskFeedbackRepository.countFeedbacksByUserIdInMonthAndSentiment(userId, month, currentYear, "Neutral");
+
+            double positivePercent = totalCurrentMonthFeedbacks > 0 ?
+                    ((double) totalCurrMonthPositiveFeedbacks / totalCurrentMonthFeedbacks) * 100 : 0.0;
+            double negativePercent = totalCurrentMonthFeedbacks > 0 ?
+                    ((double) totalCurrMonthNegativeFeedbacks / totalCurrentMonthFeedbacks) * 100 : 0.0;
+            double neutralPercent = totalCurrentMonthFeedbacks > 0 ?
+                    ((double) totalCurrMonthNeutralFeedbacks / totalCurrentMonthFeedbacks) * 100 : 0.0;
+
+            String monthName = Month.of(month).getDisplayName(TextStyle.SHORT, Locale.ENGLISH);
+            result.add(new MonthlySentimentDTO(monthName, positivePercent, negativePercent, neutralPercent));
+        }
+
+        return result;
+    }
+}

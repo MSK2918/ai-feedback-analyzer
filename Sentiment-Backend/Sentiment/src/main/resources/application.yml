@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: Sentiment
+
+  jpa:
+    open-in-view: false
+
+  profiles:
+    active: ${ACTIVE_PROFILE:dev}  # Defaults to 'dev' if ACTIVE_PROFILE is not set
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            clientId: ${GOOGLE_CLIENT_ID}  # Ensure this is set in your environment
+            clientSecret: ${GOOGLE_CLIENT_SECRET}  # Set in your environment
+            scope: email, profile
+
+
+
+server:
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      timeout: 7d
+      cookie:
+        max-age: 7d
+        secure: true
+        same-site: none
+        http-only: true
+
+fastApi:
+  url: ${FAST_API_URL}  # Ensure this is set in your environment
+
+frontend:
+  success:
+    url: ${FRONTEND_SUCCESS_URL}  # Set this in the environment
+  login:
+    url: ${FRONTEND_LOGIN_URL}  # Set this in the environment

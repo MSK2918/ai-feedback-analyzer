@@ -1,0 +1,25 @@
+server:
+  port: 9890
+
+spring:
+  application:
+    name: Sentiment
+
+  datasource:
+    url: jdbc:${DB_URL}  # Ensure DB_URL is set correctly in the environment
+    username: ${DB_USER}  # Make sure DB_USER is set in environment variables
+    password: ${DB_PASSWORD}  # Set DB_PASSWORD in environment
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update  # In production, you might want to use 'validate' or 'none'
+
+  redis:
+    host: ${REDIS_HOST}  # Set REDIS_HOST in environment
+    port: ${REDIS_PORT}  # Set REDIS_PORT in environment
+    timeout: 2000
+    password: ${REDIS_PASSWORD}
+
+
+
